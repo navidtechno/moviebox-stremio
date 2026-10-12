@@ -194,7 +194,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     );
 
     const streams = raw.map((s) => ({
-      url: proxyUrl(s.url),
+      url: s.url,
       title: `MovieBox ${s.resolutions || s.quality || ""}`.trim(),
       behaviorHints: { notWebReady: false },
     }));
@@ -208,7 +208,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         const list = Array.isArray(caps) ? caps : caps.captions || caps.subtitles || [];
         subtitles = list
           .filter((c) => c && c.url)
-          .map((c) => ({ url: proxyUrl(c.url), lang: c.language || c.lang || "en" }));
+          .map((c) => ({ url: c.url, lang: c.language || c.lang || "en" }));
       } catch { /* subtitles optional */ }
     }
 
