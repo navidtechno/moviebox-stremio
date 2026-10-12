@@ -1,0 +1,15 @@
+{
+  "name": "moviebox-stremio-addon",
+  "version": "1.0.0",
+  "description": "Unofficial Stremio addon for the MovieBox catalog",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}
