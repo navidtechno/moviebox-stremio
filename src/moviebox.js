@@ -184,7 +184,7 @@ module.exports = {
 
   // Episode list of a season: { resources: [{ resourceId, episode, title, hasSource }] }
   resources: (subjectId, se, page = 1, perPage = 50) =>
-    get(
+    get(// diag-test
       `/wefeed-mobile-bff/subject-api/resource?${qs({
         subjectId, se: String(se), page: String(page),
         perPage: String(perPage), all: "1", pagerMode: "0", resolution: "0",
