@@ -27,9 +27,9 @@ function img(url) {
 }
 
 function toMetaPreview(s) {
-  if (!s || !s.subjectId) return null;
+  if (!s || !s.subjectId || !s.detailPath) return null;
   return {
-    id: `${PREFIX}${s.subjectId}`,
+    id: `${PREFIX}${s.subjectId}:${s.detailPath}`,
     type: s.subjectType === 1 ? "movie" : "series",
     name: s.title || "Unknown",
     poster: img(s.cover && s.cover.url),
@@ -43,9 +43,35 @@ function toMetaPreview(s) {
 }
 
 function parseId(id) {
+  // mb:<subjectId>:<slug>            → meta
+  // mb:<subjectId>:<slug>:<se>:<ep>   → episode / stream
   const parts = id.replace(PREFIX, "").split(":");
-  return { subjectId: parts[0], se: parts[1] ? Number(parts[1]) : 0, ep: parts[2] ? Number(parts[2]) : 0 };
+  return {
+    subjectId: parts[0],
+    slug: parts[1] || "",
+    se: parts[2] ? Number(parts[2]) : 0,
+    ep: parts[3] ? Number(parts[3]) : 0,
+  };
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ---- manifest ---------------------------------------------------------------
 const manifest = {
@@ -85,11 +111,14 @@ builder.defineCatalogHandler(async ({ type, extra }) => {
       const groups = data.results || [];
       subjects = groups.flatMap((g) => g.subjects || []);
     } else if (type === "movie") {
-      const data = await cached("rec", 10 * 60 * 1000, () => mb.dailyRec(page, PER_PAGE));
-      subjects = data.subjects || [];
+      const data = await cached("rec", 10 * 60 * 1000, () => mb.dailyRec(1, 200));
+      subjects = (data.subjects || []).slice(skip, skip + PER_PAGE);
     } else {
-      const data = await cached("trend", 10 * 60 * 1000, () => mb.trending(2));
-      subjects = (data.items || []).map((i) => i.subject).filter(Boolean);
+      const data = await cached("trend", 10 * 60 * 1000, () => mb.trending(1, 200));
+      subjects = (data.items || [])
+        .map((i) => i.subject)
+        .filter(Boolean)
+        .slice(skip, skip + PER_PAGE);
     }
     const wantMovie = type === "movie";
     const metas = subjects
@@ -104,31 +133,31 @@ builder.defineCatalogHandler(async ({ type, extra }) => {
     return { metas: [] };
   }
 });
-
 // ---- meta -------------------------------------------------------------------
 builder.defineMetaHandler(async ({ type, id }) => {
   try {
-    const { subjectId } = parseId(id);
-    const s = await cached(`meta:${subjectId}`, 30 * 60 * 1000, () => mb.getSubject(subjectId));
+    const { subjectId, slug } = parseId(id);
+    const s = await cached(`meta:${subjectId}`, 30 * 60 * 1000, () => mb.getSubject(slug));
     const meta = toMetaPreview(s) || { id, type, name: "Unknown" };
     meta.id = id;
     meta.type = type;
 
     if (type === "series") {
-      const info = await cached(`seasons:${subjectId}`, 30 * 60 * 1000, () => mb.seasonInfo(subjectId));
+      const info = await cached(`seasons:${subjectId}`, 30 * 60 * 1000, () => mb.seasonInfo(slug));
       const videos = [];
       for (const sn of info.seasons || []) {
         const se = sn.season;
+        if (!se) continue; // se=0 is the movie placeholder
         let eps = sn.episodeCount;
         if (!eps) {
           try {
-            const r = await mb.resources(subjectId, se);
+            const r = await mb.resources(slug, se);
             eps = Math.max(0, ...(r.resources || []).map((x) => x.episode || 0));
           } catch { eps = 0; }
         }
         for (let ep = 1; ep <= (eps || 0); ep++) {
           videos.push({
-            id: `${PREFIX}${subjectId}:${se}:${ep}`,
+            id: `${PREFIX}${subjectId}:${slug}:${se}:${ep}`,
             title: `Episode ${ep}`,
             season: se,
             episode: ep,
@@ -144,18 +173,17 @@ builder.defineMetaHandler(async ({ type, id }) => {
     return { meta: { id, type, name: "Unavailable" } };
   }
 });
-
 // ---- stream -----------------------------------------------------------------
 const QUALITY_RANK = { "1080p": 4, "1080": 4, "720p": 3, "720": 3, "480p": 2, "480": 2, "360p": 1, "360": 1 };
 
 builder.defineStreamHandler(async ({ type, id }) => {
   try {
-    const { subjectId, se, ep } = parseId(id);
-    // MovieBox uses se=1/ep=1 for movies.
-    const SE = type === "movie" ? 1 : se || 1;
-    const EP = type === "movie" ? 1 : ep || 1;
+    const { subjectId, slug, se, ep } = parseId(id);
+    // H5 play API: movies use se=0/ep=0, series use their season/episode.
+    const SE = type === "movie" ? 0 : se || 1;
+    const EP = type === "movie" ? 0 : ep || 1;
 
-    const info = await mb.playInfo(subjectId, SE, EP);
+    const info = await mb.playInfo(subjectId, slug, SE, EP);
     const raw = [...(info.streams || []), ...(info.hls || [])].filter((s) => s && s.url);
     if (!raw.length) return { streams: [] };
 
@@ -176,7 +204,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let subtitles;
     if (firstId) {
       try {
-        const caps = await mb.streamCaptions(subjectId, String(firstId));
+        const caps = await mb.streamCaptions(subjectId, slug, String(firstId), raw[0].format);
         const list = Array.isArray(caps) ? caps : caps.captions || caps.subtitles || [];
         subtitles = list
           .filter((c) => c && c.url)
@@ -193,3 +221,23 @@ builder.defineStreamHandler(async ({ type, id }) => {
 });
 
 module.exports = builder.getInterface();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
