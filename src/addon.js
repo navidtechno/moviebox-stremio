@@ -5,7 +5,7 @@ const { addonBuilder } = require("stremio-addon-sdk");
 const mb = require("./moviebox");
 
 const PREFIX = "mb:";
-const PER_PAGE = 20;
+const PER_PAGE = 20; const PUBLIC_URL = (process.env.PUBLIC_URL || "https://moviebox-stremio-2gi8.onrender.com").replace(/\/+$/, ""); const proxyUrl = (u) => `${PUBLIC_URL}/proxy/${Buffer.from(u, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
 
 // ---- tiny TTL cache ---------------------------------------------------------
 const cache = new Map();
@@ -194,7 +194,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     );
 
     const streams = raw.map((s) => ({
-      url: s.url,
+      url: proxyUrl(s.url),
       title: `MovieBox ${s.resolutions || s.quality || ""}`.trim(),
       behaviorHints: { notWebReady: false },
     }));
@@ -208,7 +208,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         const list = Array.isArray(caps) ? caps : caps.captions || caps.subtitles || [];
         subtitles = list
           .filter((c) => c && c.url)
-          .map((c) => ({ url: c.url, lang: c.language || c.lang || "en" }));
+          .map((c) => ({ url: proxyUrl(c.url), lang: c.language || c.lang || "en" }));
       } catch { /* subtitles optional */ }
     }
 
