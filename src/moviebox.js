@@ -42,6 +42,59 @@ const CLIENT_INFO = JSON.stringify({
 let sessionToken = process.env.MB_TOKEN || null; // optional override
 let hostIndex = 0;
 
+// ---------------------------------------------------------------------------
+// Auth bootstrap: the mobile API answers 441 "miss token" without a Bearer
+// token. A token can be minted anonymously from the H5 API: a single GET to
+// /wefeed-h5api-bff/home returns an `x-user` response header containing JSON
+// like {"token":"eyJ...","userId":"..."} — no prior auth needed.
+// ---------------------------------------------------------------------------
+const H5_BASE = "https://h5-api.aoneroom.com";
+const H5_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+  Referer: "https://moviebox.ph/",
+  Origin: "https://moviebox.ph",
+  "X-Client-Info": '{"timezone":"Asia/Tehran"}',
+  "X-Request-Lang": "en",
+  Accept: "application/json",
+  "Content-Type": "application/json",
+};
+
+function extractToken(xuser) {
+  if (!xuser) return null;
+  let v = String(xuser).trim();
+  if (v.startsWith("{")) {
+    try {
+      const o = JSON.parse(v);
+      v = o.token || o.accessToken || o.access_token || (o.data && o.data.token) || "";
+    } catch {
+      return null;
+    }
+  }
+  v = String(v).trim().replace(/^Bearer\s+/i, "");
+  return v.startsWith("eyJ") ? v : null;
+}
+
+async function bootstrapToken() {
+  const res = await fetch(`${H5_BASE}/wefeed-h5api-bff/home?host=moviebox.ph`, {
+    headers: H5_HEADERS,
+    signal: AbortSignal.timeout(20000),
+  });
+  let t = extractToken(res.headers.get("x-user"));
+  if (!t) {
+    // fallback: token sometimes arrives as a cookie
+    const m = /token=([^;]+)/.exec(res.headers.get("set-cookie") || "");
+    if (m) t = extractToken(decodeURIComponent(m[1]));
+  }
+  if (!t) throw new Error("BOOTSTRAP_NO_TOKEN");
+  sessionToken = t;
+  return t;
+}
+
+async function ensureToken() {
+  if (!sessionToken) await bootstrapToken();
+}
+
 function headers(method, url, body) {
   const ct = method === "POST" ? "application/json; charset=utf-8" : "";
   const h = {
@@ -56,8 +109,7 @@ function headers(method, url, body) {
   return h;
 }
 
-async function request(method, path, bodyObj) {
-  const body = bodyObj ? JSON.stringify(bodyObj) : "";
+async function doRequest(method, path, body) {
   let lastErr = null;
   for (let i = 0; i < HOSTS.length; i++) {
     const host = HOSTS[(hostIndex + i) % HOSTS.length];
@@ -69,15 +121,18 @@ async function request(method, path, bodyObj) {
         body: method === "POST" ? body : undefined,
         signal: AbortSignal.timeout(20000),
       });
-      // Capture session token from the x-user response header when present.
-      const xuser = res.headers.get("x-user");
-      if (xuser && xuser.startsWith("Bearer ")) {
-        sessionToken = xuser.slice(7);
-      }
+      // Refresh session token when the API rotates it.
+      const t = extractToken(res.headers.get("x-user"));
+      if (t) sessionToken = t;
       const text = await res.text();
       if (res.status === 403 && text.includes("current region")) {
         const e = new Error("REGION_BLOCKED");
         e.regionBlocked = true;
+        throw e;
+      }
+      if (res.status === 441 || text.includes('"miss token"')) {
+        const e = new Error("MISS_TOKEN");
+        e.missToken = true;
         throw e;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
@@ -88,10 +143,26 @@ async function request(method, path, bodyObj) {
       return json.data;
     } catch (e) {
       lastErr = e;
-      if (e.regionBlocked) throw e; // region block is IP-based; other hosts won't help
+      if (e.regionBlocked || e.missToken) throw e;
     }
   }
   throw lastErr;
+}
+
+async function request(method, path, bodyObj) {
+  const body = bodyObj ? JSON.stringify(bodyObj) : "";
+  await ensureToken();
+  try {
+    return await doRequest(method, path, body);
+  } catch (e) {
+    if (e.missToken && !process.env.MB_TOKEN) {
+      // Token expired/invalid → mint a fresh one and retry once.
+      sessionToken = null;
+      await ensureToken();
+      return await doRequest(method, path, body);
+    }
+    throw e;
+  }
 }
 
 const get = (path) => request("GET", path);
