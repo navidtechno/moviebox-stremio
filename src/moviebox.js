@@ -1,54 +1,16 @@
-// Minimal MovieBox (AOneRoom) API client.
-// Hosts and protocol reverse-engineered from the MovieBox Android APK
-// (package com.community.oneroom) and verified against the live API:
-// every endpoint below answers with MovieBox JSON (or a region 403)
-// instead of 404, which confirms the paths.
+// MovieBox (AOneRoom) API client — H5 web API variant.
+//
+// Why H5: the mobile BFF hosts (api3..api8.aoneroom.com) drop connections
+// from datacenter IPs (Render Frankfurt gets "fetch failed" on all of them),
+// while the H5 website API (h5-api.aoneroom.com) answers fine.
+//
+// Auth: an anonymous token is minted via GET /wefeed-h5api-bff/home?host=moviebox.ph
+// — the `x-user` response header carries {"token":"eyJ..."}. It is sent back as
+// `Authorization: Bearer <token>`. No request signing is needed for H5.
 
-const { sign, clientToken } = require("./sign");
-
-const HOSTS = [
-  "https://api6.aoneroom.com",
-  "https://api3.aoneroom.com",
-  "https://api4.aoneroom.com",
-  "https://api5.aoneroom.com",
-  "https://api7.aoneroom.com",
-  "https://api8.aoneroom.com",
-  "https://api.inmoviebox.com",
-];
-
-const CLIENT_INFO = JSON.stringify({
-  package_name: "com.community.oneroom",
-  version_name: "4.0.01.0813.03",
-  version_code: 50020121,
-  os: "android",
-  os_version: "14",
-  install_ch: "google-play",
-  device_id: "2634a18e740b105fa3d032f2a0f9a568",
-  install_store: "gp",
-  brand: "Redmi",
-  model: "23106RN0DA",
-  system_language: "en",
-  net: "NETWORK_WIFI",
-  region: "US",
-  timezone: "America/New_York",
-  sp_code: "62120",
-  "X-Child-UID": "",
-  "X-Play-Mode": "2",
-  "X-Idle-Data": "1",
-  "X-Family-Mode": "0",
-  "X-Content-Mode": "0",
-});
-
-let sessionToken = process.env.MB_TOKEN || null; // optional override
-let hostIndex = 0;
-
-// ---------------------------------------------------------------------------
-// Auth bootstrap: the mobile API answers 441 "miss token" without a Bearer
-// token. A token can be minted anonymously from the H5 API: a single GET to
-// /wefeed-h5api-bff/home returns an `x-user` response header containing JSON
-// like {"token":"eyJ...","userId":"..."} — no prior auth needed.
-// ---------------------------------------------------------------------------
 const H5_BASE = "https://h5-api.aoneroom.com";
+const BFF = `${H5_BASE}/wefeed-h5api-bff`;
+
 const H5_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
@@ -59,6 +21,38 @@ const H5_HEADERS = {
   Accept: "application/json",
   "Content-Type": "application/json",
 };
+
+let sessionToken = process.env.MB_TOKEN || null; // optional override
+let playerDomain = null;
+let domainExpires = 0;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 function extractToken(xuser) {
   if (!xuser) return null;
@@ -75,177 +69,176 @@ function extractToken(xuser) {
   return v.startsWith("eyJ") ? v : null;
 }
 
-async function bootstrapToken() {
-  // Strategy 1: H5 website API (proven to mint tokens without auth).
-  try {
-    console.error("[bootstrap] trying H5 /home ...");
-    const res = await fetch(`${H5_BASE}/wefeed-h5api-bff/home?host=moviebox.ph`, {
-      headers: H5_HEADERS,
-      signal: AbortSignal.timeout(20000),
-    });
-    console.error(`[bootstrap] H5 status=${res.status} x-user=${!!res.headers.get("x-user")}`);
-    let t = extractToken(res.headers.get("x-user"));
-    if (!t) {
-      const m = /token=([^;]+)/.exec(res.headers.get("set-cookie") || "");
-      if (m) t = extractToken(decodeURIComponent(m[1]));
-    }
-    if (t) {
-      console.error("[bootstrap] H5 token acquired");
-      sessionToken = t;
-      return t;
-    }
-    console.error("[bootstrap] H5 gave no token, trying mobile API ...");
-  } catch (e) {
-    console.error("[bootstrap] H5 failed:", e.message, "— trying mobile API ...");
-  }
-  // Strategy 2: mobile BFF endpoints without auth — some return x-user.
-  for (const host of HOSTS) {
-    for (const p of [
-      "/wefeed-mobile-bff/subject-api/search-rank?everyoneSearch=2",
-      "/wefeed-mobile-bff/tab-operating?page=1",
-    ]) {
-      const url = host + p;
-      try {
-        const res = await fetch(url, {
-          headers: {
-            "x-tr-signature": sign(url, { method: "GET" }),
-            "x-client-token": clientToken(),
-            "x-client-info": CLIENT_INFO,
-            "user-agent": "okhttp/4.9.3",
-            accept: "application/json",
-          },
-          signal: AbortSignal.timeout(15000),
-        });
-        const t = extractToken(res.headers.get("x-user"));
-        console.error(`[bootstrap] mobile ${host} ${p} → status=${res.status} x-user=${!!t}`);
-        if (t) {
-          console.error("[bootstrap] mobile token acquired");
-          sessionToken = t;
-          hostIndex = HOSTS.indexOf(host);
-          return t;
-        }
-      } catch (e) {
-        console.error(`[bootstrap] mobile ${host} failed:`, e.message);
-      }
-    }
-  }
-  throw new Error("BOOTSTRAP_NO_TOKEN");
-}
-
 async function ensureToken() {
-  if (!sessionToken) await bootstrapToken();
+  if (sessionToken) return;
+  const res = await fetch(`${BFF}/home?host=moviebox.ph`, {
+    headers: H5_HEADERS,
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`BOOTSTRAP_HTTP_${res.status}`);
+  const t = extractToken(res.headers.get("x-user"));
+  if (!t) throw new Error("BOOTSTRAP_NO_TOKEN");
+  sessionToken = t;
 }
-
-function headers(method, url, body) {
-  const ct = method === "POST" ? "application/json; charset=utf-8" : "";
-  const h = {
-    "x-tr-signature": sign(url, { method, contentType: ct, body: body || "" }),
-    "x-client-token": clientToken(),
-    "x-client-info": CLIENT_INFO,
-    "user-agent": "okhttp/4.9.3",
-    accept: "application/json",
-  };
-  if (ct) h["content-type"] = ct;
-  if (sessionToken) h["authorization"] = `Bearer ${sessionToken}`;
-  return h;
-}
-
-async function doRequest(method, path, body) {
-  let lastErr = null;
-  for (let i = 0; i < HOSTS.length; i++) {
-    const host = HOSTS[(hostIndex + i) % HOSTS.length];
-    const url = host + path;
-    try {
-      const res = await fetch(url, {
-        method,
-        headers: headers(method, url, body),
-        body: method === "POST" ? body : undefined,
-        signal: AbortSignal.timeout(20000),
-      });
-      // Refresh session token when the API rotates it.
-      const t = extractToken(res.headers.get("x-user"));
-      if (t) sessionToken = t;
-      const text = await res.text();
-      if (res.status === 403 && text.includes("current region")) {
-        const e = new Error("REGION_BLOCKED");
-        e.regionBlocked = true;
-        throw e;
-      }
-      if (res.status === 441 || text.includes('"miss token"')) {
-        const e = new Error("MISS_TOKEN");
-        e.missToken = true;
-        throw e;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-      const json = JSON.parse(text);
-      if (json.code !== 0)
-        throw new Error(`API error ${json.code}: ${json.message}`);
-      hostIndex = (hostIndex + i) % HOSTS.length; // stick to working host
-      return json.data;
-    } catch (e) {
-      console.error(`[moviebox] ${host} error:`, e.message);
-      lastErr = e;
-      if (e.regionBlocked || e.missToken) throw e;
-    }
-  }
-  throw lastErr;
-}
-
-async function request(method, path, bodyObj) {
-  const body = bodyObj ? JSON.stringify(bodyObj) : "";
+async function api(method, path, payload, opts = {}) {
   await ensureToken();
-  try {
-    return await doRequest(method, path, body);
-  } catch (e) {
-    if (e.missToken && !process.env.MB_TOKEN) {
-      // Token expired/invalid → mint a fresh one and retry once.
-      sessionToken = null;
-      await ensureToken();
-      return await doRequest(method, path, body);
-    }
-    throw e;
+  const base = opts.base || BFF;
+  const extraHeaders = opts.headers || {};
+  const attempt = () =>
+    fetch(base + path, {
+      method,
+      headers: { ...H5_HEADERS, Authorization: `Bearer ${sessionToken}`, ...extraHeaders },
+      body: payload ? JSON.stringify(payload) : undefined,
+      signal: AbortSignal.timeout(25000),
+    });
+  let res = await attempt();
+  const rotated = extractToken(res.headers.get("x-user"));
+  if (rotated) sessionToken = rotated;
+  if (res.status === 401 || res.status === 441) {
+    // Token expired/invalid → mint a fresh one and retry once.
+    sessionToken = null;
+    await ensureToken();
+    res = await attempt();
   }
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error("BAD_JSON");
+  }
+  if (json.code !== 0) throw new Error(`API error ${json.code}: ${json.message || ""}`);
+  return json.data;
 }
 
-const get = (path) => request("GET", path);
-const post = (path, body) => request("POST", path, body);
-const qs = (o) => new URLSearchParams(o).toString();
+async function getPlayerDomain() {
+  if (playerDomain && Date.now() < domainExpires) return playerDomain;
+  const d = await api("GET", "/media-player/get-domain");
+  playerDomain = (typeof d === "string" ? d : d.domain || "").replace(/\/+$/, "");
+  if (!playerDomain) throw new Error("NO_PLAYER_DOMAIN");
+  domainExpires = Date.now() + 5 * 60 * 1000;
+  return playerDomain;
+}
+
+// Home sections (Popular Movie / Popular Series / ...) — the browse catalogs.
+async function homeSections() {
+  const data = await api("GET", "/home?host=moviebox.ph");
+  return data.operatingList || [];
+}
+
+function subjectsOfType(sections, wantMovie) {
+  const out = [];
+  for (const op of sections) {
+    if (op.type !== "SUBJECTS_MOVIE" && op.type !== "SUBJECTS_TV") continue;
+    for (const s of op.subjects || []) {
+      if (!s || !s.subjectId || !s.detailPath) continue;
+      const isMovie = s.subjectType === 1;
+      if (isMovie === wantMovie) out.push(s);
+    }
+  }
+  // de-dupe by subjectId, keep order
+  const seen = new Set();
+  return out.filter((s) => (seen.has(s.subjectId) ? false : (seen.add(s.subjectId), true)));
+}
+
+
+
+
 
 module.exports = {
-  // Search movies & shows. Returns { results: [{ topicType, subjects: [...] }], pager }
+  // Search → { results: [{ topicType, subjects }] } (same shape as before)
   search: (keyword, page = 1, perPage = 20) =>
-    post("/wefeed-mobile-bff/subject-api/search/v2", { keyword, page, perPage }),
+    api("POST", "/subject/search", { keyword, page, perPage }).then((data) => ({
+      results: [{ topicType: 0, subjects: data.items || data.list || [] }],
+      pager: data.pager,
+    })),
 
-  // Full metadata for a title. se = season number for series (omit for movies).
-  getSubject: (subjectId, se) =>
-    get(`/wefeed-mobile-bff/subject-api/get?${qs(se ? { subjectId, se } : { subjectId })}`),
-
-  // Seasons of a series: { seasons: [{ season, subjectId, title, episodeCount, cover }] }
-  seasonInfo: (subjectId) =>
-    get(`/wefeed-mobile-bff/subject-api/season-info?${qs({ subjectId })}`),
-
-  // Episode list of a season: { resources: [{ resourceId, episode, title, hasSource }] }
-  resources: (subjectId, se, page = 1, perPage = 50) =>
-    get(
-      `/wefeed-mobile-bff/subject-api/resource?${qs({
-        subjectId, se: String(se), page: String(page),
-        perPage: String(perPage), all: "1", pagerMode: "0", resolution: "0",
-      })}`
-    ),
-
-  // Stream URLs for one episode: { streams: [{ url, resolutions|quality, format, signCookie }], subtitles? }
-  playInfo: (subjectId, se, ep) =>
-    get(`/wefeed-mobile-bff/subject-api/play-info?${qs({ subjectId, se: String(se), ep: String(ep) })}`),
-
-  // Embedded subtitle tracks of a stream (streamId from play-info).
-  streamCaptions: (subjectId, streamId) =>
-    get(`/wefeed-mobile-bff/subject-api/get-stream-captions?${qs({ subjectId, streamId })}`),
-
-  // Trending / everyone's searches: { items: [{ subject }] }
-  trending: (everyoneSearch = 2) =>
-    get(`/wefeed-mobile-bff/subject-api/search-rank?${qs({ everyoneSearch: String(everyoneSearch) })}`),
-
-  // Daily movie recommendations: { subjects: [...] }
+  // Movies catalog: "Popular Movie"-style home sections (subjectType 1)
   dailyRec: (page = 1, perPage = 20) =>
-    post("/wefeed-mobile-bff/subject-api/daily-movie-rec", { page, perPage }),
+    homeSections().then((sections) => ({
+      subjects: subjectsOfType(sections, true),
+    })),
+
+  // Series catalog (subjectType 2) — shaped like the old trending()
+  trending: (page = 1, perPage = 20) =>
+    homeSections().then((sections) => ({
+      items: subjectsOfType(sections, false).map((s) => ({ subject: s })),
+    })),
+
+  // Full subject metadata, looked up by detail slug (detailPath)
+  getSubject: (slug) =>
+    api("GET", `/detail?detailPath=${encodeURIComponent(slug)}`).then((data) => data.subject),
+
+  // Seasons → { seasons: [{ season, episodeCount }] }
+  seasonInfo: (slug) =>
+    api("GET", `/detail?detailPath=${encodeURIComponent(slug)}`).then((data) => ({
+      seasons: ((data.resource || {}).seasons || []).map((sn) => ({
+        season: sn.se,
+        episodeCount: sn.maxEp,
+      })),
+    })),
+
+  // Episode list derived from seasons (H5 exposes no per-episode resource list)
+  resources: (slug, se) =>
+    module.exports.seasonInfo(slug).then((info) => {
+      const sn = (info.seasons || []).find((x) => x.season === Number(se));
+      const n = sn ? sn.episodeCount || 0 : 0;
+      return {
+        resources: Array.from({ length: n }, (_, i) => ({
+          resourceId: `${se}-${i + 1}`,
+          episode: i + 1,
+          title: `Episode ${i + 1}`,
+        })),
+      };
+    }),
+
+  // Streams. Movies use se=0/ep=0, series use their season/episode numbers.
+  playInfo: (subjectId, slug, se, ep) =>
+    getPlayerDomain()
+      .then((domain) => {
+        const bff = `${domain}/wefeed-h5api-bff`;
+        const ref =
+          `${domain}/spa/videoPlayPage/movies/${slug}` +
+          `?id=${subjectId}&type=/movie/detail&detailSe=${se}&detailEp=${ep}&lang=en`;
+        return api(
+          "GET",
+          `/subject/play?subjectId=${subjectId}&se=${se}&ep=${ep}&detailPath=${encodeURIComponent(slug)}`,
+          null,
+          { base: bff, headers: { Referer: ref } }
+        );
+      })
+      .then((data) => ({
+        streams: [...(data.streams || []), ...(data.hls || []), ...(data.dash || [])],
+        hasResource: data.hasResource,
+      })),
+
+  // Subtitle tracks for one stream
+  streamCaptions: (subjectId, slug, streamId, format) =>
+    api(
+      "GET",
+      `/subject/caption?format=${encodeURIComponent(format || "MP4")}` +
+        `&id=${encodeURIComponent(streamId)}&subjectId=${subjectId}` +
+        `&detailPath=${encodeURIComponent(slug)}`
+    ).then((data) => (data && data.captions) || (Array.isArray(data) ? data : [])),
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
